@@ -1,0 +1,333 @@
+---
+title: "Deliverable II"
+author: "Chuhan Liu"
+date: "2/3/2022"
+output: html_document
+---
+
+Reading in data:
+```{r}
+link='https://github.com/chuhanl/Governance-Analytics/raw/main/final_data.RDS'
+myFile=url(link)
+
+fromPy=readRDS(file = myFile)
+
+row.names(fromPy)=NULL
+
+str(fromPy)
+```
+
+Preparing data:
+I. Data to cluster
+```{r}
+fromPy[fromPy == "NaN"] <- NA
+
+# subset the data
+selection=c("Country","LifeExpectancyatBirth", "GenderLifeGapatBirth","LifeExpectancyat60","GenderLifeGapat60")
+dataToCluster=fromPy[,selection]
+
+# set labels as row index
+row.names(dataToCluster)=dataToCluster$Country
+dataToCluster$Country=NULL
+
+# decide if data needs to be transformed
+boxplot(dataToCluster,horizontal = T, las=2,cex.axis=0.4)
+```
+
+```{r}
+# standardizing
+dataToCluster=as.data.frame(scale(dataToCluster))
+
+### or smoothing
+# log(dataToCluster)
+```
+
+II. Compute the DISTANCE MATRIX:
+```{r}
+# set random seed
+set.seed(999)
+
+# decide distance method and compute distance matrix
+library(cluster)
+dataToCluster_DM=daisy(x=dataToCluster, metric = "gower")
+```
+
+Compute Clusters
+0. Computer suggestions
+```{r}
+# for partitioning
+library(factoextra)
+
+fviz_nbclust(dataToCluster, 
+             pam,
+             diss=dataToCluster_DM,
+             method = "gap_stat",
+             k.max = 10,verbose = F)
+```
+
+```{r}
+# for hierarchical (agglomerative)
+fviz_nbclust(dataToCluster, 
+             hcut,
+             diss=dataToCluster_DM,
+             method = "gap_stat",
+             k.max = 10,
+             verbose = F,
+             hc_func = "agnes")
+```
+
+```{r}
+# for hierarchical (divisive)
+fviz_nbclust(dataToCluster, 
+             hcut,
+             diss=dataToCluster_DM,
+             method = "gap_stat",
+             k.max = 10,
+             verbose = F,
+             hc_func = "diana")
+```
+
+1. Apply function:
+```{r}
+NumberOfClusterDesired=4
+
+# Partitioning technique
+res.pam = pam(x=dataToCluster_DM,
+              k = NumberOfClusterDesired,
+              cluster.only = F)
+
+# Hierarchical technique- agglomerative approach
+res.agnes= hcut(dataToCluster_DM, 
+                k = NumberOfClusterDesired,
+                isdiss=TRUE,
+                hc_func='agnes',
+                hc_method = "ward.D2")
+
+# Hierarchical technique- divisive approach
+res.diana= hcut(dataToCluster_DM, 
+                k = NumberOfClusterDesired,
+                isdiss=TRUE,
+                hc_func='diana',
+                hc_method = "ward.D2")
+```
+
+2. Clustering results:
+```{r}
+# add results to original data frame
+fromPy$pam=as.factor(res.pam$clustering)
+fromPy$agn=as.factor(res.agnes$cluster)
+fromPy$dia=as.factor(res.diana$cluster)
+
+# Verify ordinality in clusters?
+```
+
+3. Evaluate Results:
+```{r}
+# plot silhouettes
+fviz_silhouette(res.pam)
+fviz_silhouette(res.agnes)
+fviz_silhouette(res.diana)
+```
+
+```{r}
+# detecting cases badly clustered
+head(data.frame(res.pam$silinfo$widths),10)
+
+pamEval=data.frame(res.pam$silinfo$widths)
+agnEval=data.frame(res.agnes$silinfo$widths)
+diaEval=data.frame(res.diana$silinfo$widths)
+
+pamPoor=rownames(pamEval[pamEval$sil_width<0,])
+agnPoor=rownames(agnEval[agnEval$sil_width<0,])
+diaPoor=rownames(diaEval[diaEval$sil_width<0,])
+
+# Start a new session
+options(rgl.useNULL = TRUE)
+library(rgl)
+library("qpcR")
+
+bap_Clus=as.data.frame(qpcR:::cbind.na(sort(pamPoor), sort(agnPoor),sort(diaPoor)))
+names(bap_Clus)=c("pam","agn","dia")
+bap_Clus
+```
+
+```{r}
+# prepare a bidimensional map
+projectedData = cmdscale(dataToCluster_DM, k=2)
+
+fromPy$dim1 = projectedData[,1]
+fromPy$dim2 = projectedData[,2]
+
+fromPy[,c('dim1','dim2')][1:10,]
+
+# use those points and see the “map”
+base= ggplot(data=fromPy,
+             aes(x=dim1, y=dim2,
+                 label=Country)) 
+base + geom_text(size=2)
+```
+
+```{r}
+# Color the map using the labels from PAM
+pamPlot=base + labs(title = "PAM") + geom_point(size=2,
+                                              aes(color=pam),
+                                              show.legend = T)
+
+# Color the map using the labels from Hierarchical AGNES
+agnPlot=base + labs(title = "AGNES") + geom_point(size=2,
+                                              aes(color=agn),
+                                              show.legend = T)
+
+# Color the map using the labels from Hierarchical DIANA
+diaPlot=base + labs(title = "DIANA") + geom_point(size=2,
+                                              aes(color=dia),
+                                              show.legend = T)
+
+library(ggpubr)
+ggarrange(pamPlot, agnPlot, diaPlot,ncol = 3,common.legend = T)
+```
+
+```{r}
+# Annotating outliers
+LABELpam=ifelse(fromPy$Country%in%pamPoor,fromPy$Country,"")
+LABELdia=ifelse(fromPy$Country%in%diaPoor,fromPy$Country,"")
+LABELagn=ifelse(fromPy$Country%in%agnPoor,fromPy$Country,"")
+
+library(ggrepel)
+pamPlot + geom_text_repel(aes(label=LABELpam))
+diaPlot + geom_text_repel(aes(label=LABELdia))
+agnPlot + geom_text_repel(aes(label=LABELagn))
+```
+
+I choose Diana (hierarchical technique- divisive approach) as the clustering technique, because it has the smallest number of poorly clustered cases.
+
+FACTOR ANALYSIS
+```{r}
+selection=c("Country","LifeExpectancyatBirth", "GenderLifeGapatBirth","LifeExpectancyat60","GenderLifeGapat60")
+
+dataForFA=fromPy[,selection]
+```
+
+Confirmatory factor analysis:
+```{r}
+library(lavaan)
+
+model='
+health=~LifeExpectancyatBirth + LifeExpectancyat60 + GenderLifeGapat60
+'
+
+fit<-cfa(model, data = dataForFA,std.lv=TRUE)
+indexCFA=lavPredict(fit)
+```
+
+```{r}
+library(scales)
+indexCFANorm=rescale(as.vector(indexCFA), 
+                     to = c(0, 10))
+indexCFANorm[1:10]
+
+fromPy$health_FA=indexCFANorm
+
+evalCFA1=parameterEstimates(fit, standardized =TRUE)
+```
+
+```{r}
+# Loadings
+evalCFA1[evalCFA1$op=="=~",c('rhs','std.all','pvalue')]
+
+# Some coefficients
+evalCFA2=as.list(fitMeasures(fit))
+
+evalCFA2[c("chisq", "df", "pvalue")] # p.value > 0.05
+evalCFA2$tli # > 0.90
+evalCFA2[c( 'rmsea.ci.lower','rmsea','rmsea.ci.upper')] # RMSEA < 0.05
+```
+
+```{r}
+library(semPlot)
+
+semPaths(fit, what='std', nCharNodes=0, sizeMan=12,
+         edge.label.cex=1.5, fade=T,residuals = F)
+```
+
+Continuous outcome: EXPLANATORY APPROACH
+1. State hypotheses:
+```{r}
+# hypothesis 1: life expectancy at birth increases as we have higher urbanization rates:
+hypo1=formula(LifeExpectancyatBirth~ pctUrbanRate)
+
+# hypothesis 2: life expectancy at birth increases as we have higher urbanization rates and spend more on health:
+hypo2=formula(LifeExpectancyatBirth~ pctUrbanRate + HealthExpenditure)
+```
+
+2. Compute regression models:
+```{r}
+fromPy=fromPy[complete.cases(fromPy),]
+gauss1=glm(hypo1,
+           data = fromPy,
+           family = 'gaussian',
+           na.action = na.exclude)
+
+gauss2=glm(hypo2,
+           data = fromPy,
+           family = 'gaussian',
+           na.action = na.exclude)
+```
+
+3. See results:
+```{r}
+# First Hypothesis
+summary(gauss1)
+```
+
+```{r}
+# Second Hypothesis
+summary(gauss2)
+```
+
+4. Search for better model:
+```{r}
+anova(gauss1,gauss2,test="Chisq")
+```
+
+5. Verify the situation of chosen model:
+```{r}
+# Linearity between dependent variable and predictors?
+plot(gauss2,1)
+```
+The linear relationship does not hold well.
+
+```{r}
+# Normality of residuals?
+shapiro.test(gauss2$residuals) #p-value>0.05
+```
+The data is not normally distributed.
+
+```{r}
+# Homoscedasticity?
+library(lmtest)
+bptest(gauss2) #p-value>0.05
+```
+Cannot assume Homoscedasticity.
+
+```{r}
+# No colinearity?
+library(car)
+vif(gauss2) # lower than 5 is desirable
+```
+The predictors are not correlated.
+
+```{r}
+# Analize the effect of atypical values:
+gaussInf=as.data.frame(influence.measures(gauss2)$is.inf)
+gaussInf[gaussInf$cook.d,]
+```
+There is one influential atypical value.
+
+6. Summary plot:
+```{r}
+library(sjPlot)
+
+plot_models(gauss2,vline.color = "grey")
+```
+Life expectancy at birth increases as we have higher urbanization rates and spend more on health.
